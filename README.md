@@ -154,7 +154,20 @@ align_recordings('sas_001')                  % defaults to TcPPG
 figure_cleanup = align_recordings('sas_001', 'TcPPG');
 % ...review figures...
 clear figure_cleanup
+
+% Replace the default HD-EEG source for C3:
+align_recordings('sas_046', 'TcPPG', {'C3', 'LL5'})
+
+% Or specify multiple replacements in one two-column cell array:
+align_recordings('sas_046', 'TcPPG', {'C3', 'LL5'; 'C4', 'RR5'})
 ```
+
+The optional third argument, `channel_overrides`, has one replacement per row:
+an aligned channel name in the first column and its HD-EEG source label in the
+second. Each entry must be a nonempty row character vector. Unspecified
+channels retain their defaults; omitting this argument or passing `{}` keeps
+the complete default mapping. Overrides change source selection while keeping
+the aligned channel names and EDF output labels unchanged.
 
 The function prints a ten-step progress checklist, writes a timestamped log,
 saves diagnostic PNGs in the subject's `clinical` directory, and writes the
@@ -377,8 +390,10 @@ EDF.
 <details>
 <summary><strong>Technical details: channel mapping</strong></summary>
 
-[`truncate_eeg_segments.m`](helper_functions/truncate_eeg_segments.m) uses the
-following exact label mapping:
+[`get_hd_eeg_channel_mapping.m`](helper_functions/get_hd_eeg_channel_mapping.m)
+defines the following default label mapping, shared by
+[`truncate_eeg_segments.m`](helper_functions/truncate_eeg_segments.m) and the
+final QA functions:
 
 | Aligned label | Stanford HD-EEG label | Role |
 | --- | --- | --- |
@@ -394,7 +409,14 @@ following exact label mapping:
 | `M2` | `RD6` | HD reference and faulty-path `M2` source |
 | `VEOGL` | `VEOGL` | EOG QA and faulty-path `E1` source |
 
-The helper returns one cell per matched segment, with channels in rows and the
+`channel_overrides` can replace any of these eleven aligned-channel sources,
+including `M1`, `M2`, and `VEOGL`. Invalid cell-array formats, unknown aligned
+names, and repeated aligned names cause an error. Truncation also requires
+each selected HD-EEG source label to exist in the recording. Replacing a
+mastoid source changes every aligned derivation that uses it; replacing `Fp2`
+also changes its use as the faulty-path `E2` source.
+
+Truncation returns one cell per matched segment, with channels in rows and the
 inclusive range `eeg_start_sample:eeg_end_sample` in columns. Missing mapped
 labels cause an error rather than a positional fallback.
 The entry point defines `aligned_eeg_channel_names` once and passes it
@@ -541,10 +563,10 @@ and is used for output-channel QA and EDF writing. The original
 | `C4` | aligned `C4 - M1` + clinical `M1` | aligned `C4` |
 | `O1` | aligned `O1 - M2` + clinical `M2` | aligned `O1` |
 | `O2` | aligned `O2 - M1` + clinical `M1` | aligned `O2` |
-| `M1` | clinical `M1` | aligned `M1` (`LD6`) |
-| `M2` | clinical `M2` | aligned `M2` (`RD6`) |
+| `M1` | clinical `M1` | aligned `M1` (default HD source `LD6`) |
+| `M2` | clinical `M2` | aligned `M2` (default HD source `RD6`) |
 | `E1` | clinical `E1` | aligned `VEOGL` |
-| `E2` | clinical `E2` | aligned `Fp2` (HD source `R1`) |
+| `E2` | clinical `E2` | aligned `Fp2` (default HD source `R1`) |
 
 Thus, in the normal pathway, a clinical montage such as `C3:M2` displays
 
@@ -555,7 +577,8 @@ Thus, in the normal pathway, a clinical montage such as `C3:M2` displays
 
 In the faulty pathway, the clinical montage subtracts the replaced HD mastoid
 directly from the aligned active electrode. Because the same already-processed
-`R1` row serves both `Fp2` and `E2`, it is not filtered or resampled twice.
+aligned `Fp2` row serves both `Fp2` and `E2`, it is not filtered or resampled
+twice.
 
 Before substitution, the helper validates that all 12 direct labels occur
 exactly once, are `uV` channels with a common samples-per-record value, and
@@ -587,8 +610,9 @@ aligned EDF is used downstream.
 [`sanity_check_spectrogram.m`](helper_functions/sanity_check_spectrogram.m)
 compares:
 
-- native HD-EEG `C3:M2`, calculated as `LA2 - RD6` after mean-centering and the
-  same high-pass filter, at the original 500 Hz; and
+- native HD-EEG `C3:M2`, calculated from the effective `C3` and `M2` source
+  channels (default `LA2 - RD6`) after mean-centering and the same high-pass
+  filter, at the original 500 Hz; and
 - the clinical-montage result reconstructed as final EDF `C3 - M2`, which
   recovers the resampled, zero-padded HD-EEG `C3:M2` at the EDF rate under
   either clinical pathway.
@@ -596,13 +620,17 @@ compares:
 Both use multitaper spectrograms over 0–40 Hz with shared color limits. Before
 each call, the requested 0.05-second step is rounded upward to a whole number
 of samples at that signal's sampling rate.
+The native plot title names the effective sources, including any overrides.
 
 [`sanity_check_eog.m`](helper_functions/sanity_check_eog.m) compares aligned
-`VEOGL:M2` (`VEOGL - RD6`) with `E2:M1`, `E1:M2`, and `E2:M2` reconstructed
-from the original clinical EDF `E1`, `E2`, `M1`, and `M2` rows in
-`signalCell_all` on a shared EDF time axis. Stored montage rows are ignored, so
+`VEOGL:M2` (default sources `VEOGL - RD6`) with `E2:M1`, `E1:M2`, and `E2:M2`
+reconstructed from the original clinical EDF `E1`, `E2`, `M1`, and `M2` rows
+in `signalCell_all` on a shared EDF time axis. Stored montage rows are ignored, so
 the figure always compares the aligned HD-EEG signal against direct clinical
 recordings rather than pathway-specific substituted output.
+It accepts the same optional mapping to name the effective `VEOGL` and `M2`
+sources in its HD-EEG plot title; the plotted data already come from the
+aligned rows selected using that mapping.
 
 With plotting enabled throughout the current entry point, it opens:
 

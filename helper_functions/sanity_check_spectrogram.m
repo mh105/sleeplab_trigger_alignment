@@ -1,14 +1,22 @@
 function figure_handle = sanity_check_spectrogram( ...
-    EEG, header_all, signalHeader_all, signalCell_final)
+    EEG, header_all, signalHeader_all, signalCell_final, channel_overrides)
 %SANITY_CHECK_SPECTROGRAM Compare native and final EDF C3:M2 spectrograms.
 %   The native trace is constructed from the full 500-Hz recording by
-%   mean-centering and high-pass filtering LA2 and RD6 separately, then
-%   subtracting RD6 from LA2. The final trace is reconstructed from the
-%   direct EDF C3 and M2 rows. Their difference is the resampled and
+%   mean-centering and high-pass filtering the C3 and M2 HD-EEG sources
+%   separately, then subtracting M2 from C3 (LA2 - RD6 by default).
+%   Optional CHANNEL_OVERRIDES is a two-column cell array of aligned names
+%   and replacement HD-EEG labels, such as {'C3', 'LL5'; 'M2', 'RR5'}.
+%   The final trace is reconstructed from direct EDF C3 and M2 rows.
+%   Their difference is the resampled and
 %   zero-padded HD-EEG C3:M2 signal that the clinical montage will display
 %   under either clinical pathway.
 
-native_channel_names = {'LA2', 'RD6'};
+if nargin < 5
+    channel_overrides = {};
+end
+channel_mapping = get_hd_eeg_channel_mapping(channel_overrides);
+[~, native_mapping_index] = ismember({'C3', 'M2'}, channel_mapping(:, 1));
+native_channel_names = channel_mapping(native_mapping_index, 2).';
 eeg_channel_names = {EEG.chanlocs.labels};
 native_channel_index = zeros(size(native_channel_names));
 
@@ -108,7 +116,8 @@ axis(axes_handles(1), 'tight')
 xlabel(axes_handles(1), 'Time from HD-EEG recording start (hours)')
 ylabel(axes_handles(1), 'Frequency (Hz)')
 title(axes_handles(1), sprintf( ...
-    'Original HD-EEG C3:M2 (LA2 - RD6), %.0f Hz', EEG.srate))
+    'Original HD-EEG C3:M2 (%s - %s), %.0f Hz', ...
+    native_channel_names{1}, native_channel_names{2}, EEG.srate))
 native_color_limits = climscale(axes_handles(1));
 native_colorbar = colorbar(axes_handles(1));
 ylabel(native_colorbar, 'PSD (dB)')

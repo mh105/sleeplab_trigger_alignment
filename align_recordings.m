@@ -1,9 +1,13 @@
-function [ figure_cleanup ] = align_recordings(subject_code, trig_channel)
+function [ figure_cleanup ] = align_recordings(subject_code, trig_channel, channel_overrides)
 %% Sleep and EEG Recording Alignment with Stochastic (all night) Triggers
-% Last edit by Alex He 08/10/2026
+% Last edit by Alex He 10/24/2026
+% Optional channel overrides: align_recordings('sas_046', 'TcPPG', {'C3', 'LL5'})
 
-if nargin < 2
+if nargin < 2 || isempty(trig_channel)
     trig_channel = 'TcPPG';
+end
+if nargin < 3
+    channel_overrides = {};
 end
 
 figure_cleanup = {};
@@ -15,6 +19,9 @@ if isempty(which('extract_triggers'))
     repo_root = fileparts(which('align_recordings'));
     addpath(genpath(fullfile(repo_root, 'helper_functions')))
 end
+
+% Validate override names and format before loading the recordings.
+get_hd_eeg_channel_mapping(channel_overrides);
 
 fn_eeg = fullfile(dataDir, subject_code, 'set', [subject_code '_sleep_ds500_Z3.set']);
 fn_edf = fullfile(dataDir, subject_code, 'clinical', [subject_code, '.edf']);
@@ -88,7 +95,7 @@ mark_step_done(4);
 
 %% Truncate relevant HD-EEG channels to within segment sample bounds
 % Segment 8 scalp EEG channels as well as M1 and M2 analogs for re-referencing
-eeg_segment_data = truncate_eeg_segments(matched_segments, eeg_input, aligned_eeg_channel_names);
+eeg_segment_data = truncate_eeg_segments(matched_segments, eeg_input, aligned_eeg_channel_names, channel_overrides);
 mark_step_done(5);
 
 %% Resample HD-EEG signal into EDF sampling rate
@@ -109,12 +116,12 @@ figure_cleanup{end + 1} = save_and_track_alignment_figure(sanity_figure_handle, 
 mark_step_done(8);
 
 %% Final sanity check plots
-% 9.1) Compare original HD-EEG LA2:RD6 with C3:M2 reconstructed from final ouput EDF signals
-sanity_figure_handle = sanity_check_spectrogram(EEG, header_all, signalHeader_all, signalCell_final);
+% 9.1) Compare mapped native C3:M2 with C3:M2 reconstructed from final output EDF signals
+sanity_figure_handle = sanity_check_spectrogram(EEG, header_all, signalHeader_all, signalCell_final, channel_overrides);
 figure_cleanup{end + 1} = save_and_track_alignment_figure(sanity_figure_handle, clinical_directory, subject_code, 9, '1_spectrogram');
 
 % 9.2) Compare aligned HD-EEG VEOGL with original clinical EOG signals
-sanity_figure_handle = sanity_check_eog(aligned_eeg_data, aligned_eeg_channel_names, signalHeader_all, signalCell_all, edf_Fs);
+sanity_figure_handle = sanity_check_eog(aligned_eeg_data, aligned_eeg_channel_names, signalHeader_all, signalCell_all, edf_Fs, channel_overrides);
 figure_cleanup{end + 1} = save_and_track_alignment_figure(sanity_figure_handle, clinical_directory, subject_code, 9, '2_eog');
 mark_step_done(9);
 
