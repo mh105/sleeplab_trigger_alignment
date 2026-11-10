@@ -331,6 +331,15 @@ data before a trigger-box restart, and the terminal relationship between the
 recordings. Supported gaps are bracketed by trustworthy trigger anchors;
 ambiguous loss that cannot be resolved safely stops or requires re-locking.
 
+Missing-boundary recovery checks both systems within the recovered window.
+Advancing across two counterpart chunks does not make the second chunk trusted:
+its intervals are mapped independently to canonical positions and compared
+directly with the recovered intervals. Separate timing discrepancies or missing
+triggers create additional gaps while valid runs on either side are retained.
+Amplifier brackets in consumed chunks are also audited, including brackets that
+cross into the next chunk. The matcher stores the approved recovery pairs for
+segment extraction; unresolved cycle correspondence fails explicitly.
+
 For a true EDF late start without a validation sequence, the leading events must
 be only `63` triggers and provide at least two consecutive intervals that match
 one unique suffix of both the EDF canonical cycle and HD-EEG cycle 1. The first
@@ -359,7 +368,9 @@ Unsafe intervals and terminal padding/truncation are marked on the plot.
 <summary><strong>Technical details: continuous-segment extraction and drift checks</strong></summary>
 
 [`extract_segments.m`](helper_functions/extract_segments.m) reconstructs the
-matched trigger intervals from the matcher's comparison history. Consecutive
+matched trigger intervals from the matcher's comparison history and approved
+recovery pairs. Every retained pair is checked again for matching endpoint types
+and interval timing before segments are formed. Consecutive
 paired intervals become one segment; discontinuities in either system begin a
 new segment. Intervals flagged as unsafe by amplifier-interruption handling are
 excluded even if their trigger timing otherwise matches. The resulting table

@@ -310,6 +310,211 @@ verifyEqual(testCase, report.edf_start_sample(2), ...
     double(edf.event_table.latency(107)))
 end
 
+function testMissingBoundaryAndSkippedCounterpartTimingStepBothSplit(testCase)
+for boundary_system = ["eeg", "edf"]
+    for step_sec = [-1, 1]
+        if boundary_system == "eeg"
+            [eeg, edf] = build_pair(missing_boundary_keep, complete_keep);
+            edf.event_table.latency(121:end) = ...
+                edf.event_table.latency(121:end) + step_sec * edf.trigger_Fs;
+            eeg_start_index = [1; 101; 115];
+            edf_start_index = [1; 107; 121];
+            eeg_end_index = [100; 114; height(eeg.event_table)];
+            edf_end_index = [100; 120; height(edf.event_table)];
+        else
+            [eeg, edf] = build_pair(complete_keep, missing_boundary_keep);
+            eeg.event_table.latency(121:end) = ...
+                eeg.event_table.latency(121:end) + step_sec * eeg.Fs;
+            eeg_start_index = [1; 107; 121];
+            edf_start_index = [1; 101; 115];
+            eeg_end_index = [100; 120; height(eeg.event_table)];
+            edf_end_index = [100; 114; height(edf.event_table)];
+        end
+        [result, eeg, edf] = match_triggers(eeg, edf);
+
+        report = extract_segments(result, eeg, edf);
+
+        verifyEqual(testCase, height(report), 3)
+        verifyEqual(testCase, report.eeg_start_sample, ...
+            double(eeg.event_table.latency(eeg_start_index)))
+        verifyEqual(testCase, report.edf_start_sample, ...
+            double(edf.event_table.latency(edf_start_index)))
+        verifyEqual(testCase, report.eeg_end_sample, ...
+            double(eeg.event_table.latency(eeg_end_index)))
+        verifyEqual(testCase, report.edf_end_sample, ...
+            double(edf.event_table.latency(edf_end_index)))
+        boundary_loss = result.missing_periods( ...
+            result.missing_periods.reason == "suspected_missing_boundary", :);
+        verifyEqual(testCase, boundary_loss.system, boundary_system)
+        verifyEqual(testCase, boundary_loss.start_anchor_event_index, 100)
+        verifyEqual(testCase, boundary_loss.end_anchor_event_index, 101)
+        verify_segment_interval_timing(testCase, report, eeg, edf, ...
+            result.interval_tolerance_sec)
+    end
+end
+end
+
+function testMissingBoundaryAndMultipleSkippedCounterpartStepsAllSplit(testCase)
+for boundary_system = ["eeg", "edf"]
+    if boundary_system == "eeg"
+        [eeg, edf] = build_pair(missing_boundary_keep, complete_keep);
+        edf.event_table.latency(121:end) = ...
+            edf.event_table.latency(121:end) - edf.trigger_Fs;
+        edf.event_table.latency(131:end) = ...
+            edf.event_table.latency(131:end) + 2 * edf.trigger_Fs;
+        eeg_start_index = [1; 101; 115; 125];
+        edf_start_index = [1; 107; 121; 131];
+        eeg_end_index = [100; 114; 124; height(eeg.event_table)];
+        edf_end_index = [100; 120; 130; height(edf.event_table)];
+    else
+        [eeg, edf] = build_pair(complete_keep, missing_boundary_keep);
+        eeg.event_table.latency(121:end) = ...
+            eeg.event_table.latency(121:end) - eeg.Fs;
+        eeg.event_table.latency(131:end) = ...
+            eeg.event_table.latency(131:end) + 2 * eeg.Fs;
+        eeg_start_index = [1; 107; 121; 131];
+        edf_start_index = [1; 101; 115; 125];
+        eeg_end_index = [100; 120; 130; height(eeg.event_table)];
+        edf_end_index = [100; 114; 124; height(edf.event_table)];
+    end
+    [result, eeg, edf] = match_triggers(eeg, edf);
+
+    report = extract_segments(result, eeg, edf);
+
+    verifyEqual(testCase, height(report), 4)
+    verifyEqual(testCase, report.eeg_start_sample, ...
+        double(eeg.event_table.latency(eeg_start_index)))
+    verifyEqual(testCase, report.edf_start_sample, ...
+        double(edf.event_table.latency(edf_start_index)))
+    verifyEqual(testCase, report.eeg_end_sample, ...
+        double(eeg.event_table.latency(eeg_end_index)))
+    verifyEqual(testCase, report.edf_end_sample, ...
+        double(edf.event_table.latency(edf_end_index)))
+    verify_segment_interval_timing(testCase, report, eeg, edf, ...
+        result.interval_tolerance_sec)
+end
+end
+
+function testMissingBoundaryAndSkippedAmplifierInterruptionBothSplit(testCase)
+[eeg, edf] = build_pair(complete_keep, missing_boundary_keep);
+eeg.event_table.latency(121:end) = ...
+    eeg.event_table.latency(121:end) - eeg.Fs;
+eeg = attach_amplifier_interruptions(eeg, 120, 121, "paired");
+[result, eeg, edf] = match_triggers(eeg, edf);
+
+report = extract_segments(result, eeg, edf);
+
+verifyEqual(testCase, height(report), 3)
+verifyEqual(testCase, report.eeg_end_sample(1:2), ...
+    double(eeg.event_table.latency([100; 120])))
+verifyEqual(testCase, report.eeg_start_sample(2:3), ...
+    double(eeg.event_table.latency([107; 121])))
+verifyEqual(testCase, report.edf_end_sample(1:2), ...
+    double(edf.event_table.latency([100; 114])))
+verifyEqual(testCase, report.edf_start_sample(2:3), ...
+    double(edf.event_table.latency([101; 115])))
+verifyEqual(testCase, result.amplifier_interruptions.resolution_status, ...
+    "excluded_and_relocked")
+verifyTrue(testCase, result.amplifier_interruptions.exclude_from_segments)
+verifyEqual(testCase, sort(result.missing_periods.system), ["edf"; "eeg"])
+verify_segment_interval_timing(testCase, report, eeg, edf, ...
+    result.interval_tolerance_sec)
+end
+
+function testMissingBoundaryAndSkippedCounterpartMissingTriggerBothSplit(testCase)
+counterpart_keep = complete_keep;
+counterpart_keep{3} = setdiff((1:50)', 20, 'stable');
+for boundary_system = ["eeg", "edf"]
+    if boundary_system == "eeg"
+        [eeg, edf] = build_pair(missing_boundary_keep, counterpart_keep);
+        eeg_start_index = [1; 101; 115];
+        edf_start_index = [1; 107; 120];
+        eeg_end_index = [100; 113; height(eeg.event_table)];
+        edf_end_index = [100; 119; height(edf.event_table)];
+    else
+        [eeg, edf] = build_pair(counterpart_keep, missing_boundary_keep);
+        eeg_start_index = [1; 107; 120];
+        edf_start_index = [1; 101; 115];
+        eeg_end_index = [100; 119; height(eeg.event_table)];
+        edf_end_index = [100; 113; height(edf.event_table)];
+    end
+    [result, eeg, edf] = match_triggers(eeg, edf);
+
+    report = extract_segments(result, eeg, edf);
+
+    verifyEqual(testCase, height(report), 3)
+    verifyEqual(testCase, report.eeg_start_sample, ...
+        double(eeg.event_table.latency(eeg_start_index)))
+    verifyEqual(testCase, report.edf_start_sample, ...
+        double(edf.event_table.latency(edf_start_index)))
+    verifyEqual(testCase, report.eeg_end_sample, ...
+        double(eeg.event_table.latency(eeg_end_index)))
+    verifyEqual(testCase, report.edf_end_sample, ...
+        double(edf.event_table.latency(edf_end_index)))
+    verify_segment_interval_timing(testCase, report, eeg, edf, ...
+        result.interval_tolerance_sec)
+end
+end
+
+function testMissingBoundaryAndAdjacentSkippedMarkersExcludeWholeGroup(testCase)
+[eeg, edf] = build_pair(complete_keep, missing_boundary_keep);
+eeg = attach_amplifier_interruptions( ...
+    eeg, [120; 121], [121; 122], "paired");
+[result, eeg, edf] = match_triggers(eeg, edf);
+
+report = extract_segments(result, eeg, edf);
+
+verifyEqual(testCase, height(report), 3)
+verifyEqual(testCase, report.eeg_end_sample(1:2), ...
+    double(eeg.event_table.latency([100; 120])))
+verifyEqual(testCase, report.eeg_start_sample(2:3), ...
+    double(eeg.event_table.latency([107; 122])))
+verifyEqual(testCase, report.edf_end_sample(1:2), ...
+    double(edf.event_table.latency([100; 114])))
+verifyEqual(testCase, report.edf_start_sample(2:3), ...
+    double(edf.event_table.latency([101; 116])))
+verifyEqual(testCase, result.amplifier_interruptions.resolution_status, ...
+    repmat("excluded_and_relocked", 2, 1))
+verifyTrue(testCase, all(result.amplifier_interruptions.exclude_from_segments))
+verifyEqual(testCase, ...
+    numel(unique(result.amplifier_interruptions.gap_group_index)), 1)
+boundary_loss = result.missing_periods( ...
+    result.missing_periods.reason == "suspected_missing_boundary", :);
+verifyEqual(testCase, boundary_loss.system, "edf")
+verifyEqual(testCase, boundary_loss.start_anchor_event_index, 100)
+verifyEqual(testCase, boundary_loss.end_anchor_event_index, 101)
+verify_segment_interval_timing(testCase, report, eeg, edf, ...
+    result.interval_tolerance_sec)
+end
+
+function testMissingBoundaryAndSkippedMultiIntervalMarkersBothSplit(testCase)
+for anchors = [120, 149; 123, 152]
+    [eeg, edf] = build_pair(complete_keep, missing_boundary_keep);
+    eeg.event_table.latency(anchors(2):end) = ...
+        eeg.event_table.latency(anchors(2):end) - eeg.Fs;
+    eeg = attach_amplifier_interruptions( ...
+        eeg, anchors(1), anchors(2), "paired");
+    [result, eeg, edf] = match_triggers(eeg, edf);
+
+    report = extract_segments(result, eeg, edf);
+
+    verifyEqual(testCase, height(report), 3)
+    verifyEqual(testCase, report.eeg_end_sample(1:2), ...
+        double(eeg.event_table.latency([100; anchors(1)])))
+    verifyEqual(testCase, report.eeg_start_sample(2:3), ...
+        double(eeg.event_table.latency([107; anchors(2)])))
+    verifyEqual(testCase, report.edf_end_sample(1:2), ...
+        double(edf.event_table.latency([100; anchors(1) - 6])))
+    verifyEqual(testCase, report.edf_start_sample(2:3), ...
+        double(edf.event_table.latency([101; anchors(2) - 6])))
+    verifyEqual(testCase, result.amplifier_interruptions.resolution_status, ...
+        "excluded_and_relocked")
+    verifyTrue(testCase, result.amplifier_interruptions.exclude_from_segments)
+    verify_segment_interval_timing(testCase, report, eeg, edf, ...
+        result.interval_tolerance_sec)
+end
+end
+
 function testSharedTriggerGlitchStaysContinuous(testCase)
 [eeg, edf] = build_pair(short_loss_keep, short_loss_keep);
 [result, eeg, edf] = match_triggers(eeg, edf);
@@ -480,7 +685,7 @@ for line_i = 1:numel(lines)
 end
 end
 
-function testNonlinearClockDriftFailsInLaterSegment(testCase)
+function testMutatedIntervalFailsBeforeDriftFit(testCase)
 [eeg, edf] = build_pair(short_loss_keep, complete_keep);
 [result, eeg, edf] = match_triggers(eeg, edf);
 report = extract_segments(result, eeg, edf);
@@ -495,6 +700,32 @@ edf.event_table.latency(step_event_index:end) = ...
 
 verifyError(testCase, ...
     @() extract_segments(result, eeg, edf), ...
+    'extract_segments:UnvalidatedIntervalPair')
+end
+
+function testCumulativeNonlinearityFailsWithLocallyMatchedIntervals(testCase)
+[eeg, edf] = build_pair(short_loss_keep, complete_keep);
+[result, eeg, edf] = match_triggers(eeg, edf);
+report = extract_segments(result, eeg, edf);
+
+eeg_event_index = find( ...
+    double(eeg.event_table.latency) >= report.eeg_start_sample(2) & ...
+    double(eeg.event_table.latency) <= report.eeg_end_sample(2));
+edf_event_index = find( ...
+    double(edf.event_table.latency) >= report.edf_start_sample(2) & ...
+    double(edf.event_table.latency) <= report.edf_end_sample(2));
+ramp_start = edf_event_index(ceil(numel(edf_event_index) / 2));
+offset_samples = min(20, max(0, ...
+    (1:height(edf.event_table))' - ramp_start + 1));
+edf.event_table.latency = edf.event_table.latency + offset_samples;
+
+interval_difference_sec = ...
+    diff(double(edf.event_table.latency(edf_event_index))) / edf.trigger_Fs - ...
+    diff(double(eeg.event_table.latency(eeg_event_index))) / eeg.Fs;
+verifyLessThanOrEqual(testCase, abs(interval_difference_sec), ...
+    result.interval_tolerance_sec)
+verifyError(testCase, ...
+    @() extract_segments(result, eeg, edf), ...
     'extract_segments:NonlinearClockDrift')
 end
 
@@ -505,6 +736,23 @@ eeg.event_table = build_event_table(eeg.Fs, 0, eeg_keep);
 edf.Fs = 256;
 edf.trigger_Fs = 128;
 edf.event_table = build_event_table(edf.trigger_Fs, 100, edf_keep);
+
+end
+
+function verify_segment_interval_timing(testCase, report, eeg, edf, tolerance_sec)
+
+for segment_i = 1:height(report)
+    eeg_events = eeg.event_table( ...
+        double(eeg.event_table.latency) >= report.eeg_start_sample(segment_i) & ...
+        double(eeg.event_table.latency) <= report.eeg_end_sample(segment_i), :);
+    edf_events = edf.event_table( ...
+        double(edf.event_table.latency) >= report.edf_start_sample(segment_i) & ...
+        double(edf.event_table.latency) <= report.edf_end_sample(segment_i), :);
+    verifyEqual(testCase, eeg_events.type, edf_events.type)
+    verifyLessThanOrEqual(testCase, ...
+        abs(diff(double(eeg_events.latency)) / eeg.Fs - ...
+        diff(double(edf_events.latency)) / edf.trigger_Fs), tolerance_sec)
+end
 
 end
 

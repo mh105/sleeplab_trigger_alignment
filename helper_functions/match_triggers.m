@@ -12,6 +12,8 @@ function [result, eeg_input, edf_input, figure_handle] = match_triggers( ...
 %   places the initial EEG anchor on the initial EDF anchor.
 %   EEG and EDF chunk indices advance independently after a discrepancy so
 %   matching can resume after a short loss or one missed cycle boundary.
+%   RESULT.recovered_intervals stores approved pairs from loss recovery;
+%   every reused counterpart interval is checked even in skipped chunks.
 %   Missing-period bounds are trustworthy trigger anchors; data strictly
 %   between the anchors is unsafe, while the anchor samples remain valid.
 %   When EEG_INPUT.amplifier_interruptions is present, each marked bracket
@@ -425,6 +427,13 @@ while eeg_chunk_i <= height(eeg_chunk_report) && ...
             break
         end
 
+        result = approve_loss_recovery( ...
+            result, affected_system, loss_prefix_count, loss_suffix_count, ...
+            eeg_chunk_i, edf_chunk_i, next_eeg_chunk_i, next_edf_chunk_i, ...
+            eeg_event_table, eeg_Fs, eeg_chunk_report, eeg_canonical_edges, ...
+            edf_event_table, edf_Fs, edf_chunk_report, edf_canonical_edges, ...
+            interval_tolerance_sec);
+        amplifier_interruptions = result.amplifier_interruptions;
         result.requires_relock = any( ...
             isnan(result.missing_periods.end_anchor_event_index));
         eeg_chunk_i = next_eeg_chunk_i;
@@ -941,6 +950,9 @@ result = struct( ...
     'terminal_common_trigger_count', 0, ...
     'stopped_reason', "", ...
     'comparison_history', empty_history_table, ...
+    'recovered_intervals', struct( ...
+        'eeg_chunk_index', {}, 'edf_chunk_index', {}, 'pairs', {}, ...
+        'has_matching_suffix', {}), ...
     'missing_periods', empty_missing_period_table);
 
 end
@@ -1613,6 +1625,12 @@ for group_offset = 1:numel(group_ids)
                 end_anchor, eeg_chunk_i, edf_chunk_i, ...
                 eeg_event_table, eeg_chunk_report, ...
                 edf_event_table, edf_chunk_report);
+        if was_excluded && isfinite( ...
+                interruptions.edf_end_anchor_event_index(interruption_i))
+            edf_end_anchor = ...
+                interruptions.edf_end_anchor_event_index(interruption_i);
+            end_anchor_mapped = true;
+        end
         if ~end_anchor_mapped
             interruptions.resolution_status(all_group_rows) = ...
                 "manual_review";
@@ -1628,6 +1646,12 @@ for group_offset = 1:numel(group_ids)
                     start_anchor, eeg_chunk_i, edf_chunk_i, ...
                     eeg_event_table, eeg_chunk_report, ...
                     edf_event_table, edf_chunk_report);
+            if was_excluded && isfinite( ...
+                    interruptions.edf_start_anchor_event_index(interruption_i))
+                edf_start_anchor = ...
+                    interruptions.edf_start_anchor_event_index(interruption_i);
+                start_anchor_mapped = true;
+            end
             if ~start_anchor_mapped
                 interruptions.resolution_status(all_group_rows) = ...
                     "manual_review";
@@ -1728,6 +1752,232 @@ mapped = edf_anchor <= edf_chunk_report.end_event_index(edf_anchor_chunk_i) && .
 if ~mapped
     edf_anchor = NaN;
 end
+
+end
+
+%%
+function result = approve_loss_recovery( ...
+    result, affected_system, prefix_count, suffix_count, ...
+    eeg_chunk_i, edf_chunk_i, next_eeg_chunk_i, next_edf_chunk_i, ...
+    eeg_events, eeg_Fs, eeg_report, eeg_canonical, ...
+    edf_events, edf_Fs, edf_report, edf_canonical, tolerance_sec)
+% Chunk traversal locates candidate intervals; only pairwise checks approve them.
+
+if next_eeg_chunk_i > height(eeg_report) || ...
+        next_edf_chunk_i > height(edf_report)
+    error('match_triggers:TerminalRegionSkipped', ...
+        ['A chunk-index jump passed the terminal region before its start ' ...
+         'could be aligned. Manual terminal review is required.'])
+end
+if affected_system == "eeg"
+    affected = extract_chunk_edges(eeg_events, eeg_Fs, eeg_report, eeg_chunk_i);
+    counterpart_events = edf_events;
+    counterpart_Fs = edf_Fs;
+    counterpart_report = edf_report;
+    counterpart_canonical = edf_canonical;
+    counterpart_chunks = [edf_chunk_i, next_edf_chunk_i - 1];
+    counterpart_system = "edf";
+else
+    affected = extract_chunk_edges(edf_events, edf_Fs, edf_report, edf_chunk_i);
+    counterpart_events = eeg_events;
+    counterpart_Fs = eeg_Fs;
+    counterpart_report = eeg_report;
+    counterpart_canonical = eeg_canonical;
+    counterpart_chunks = [eeg_chunk_i, next_eeg_chunk_i - 1];
+    counterpart_system = "eeg";
+end
+
+candidates = table('Size', [0 7], ...
+    'VariableTypes', repmat({'double'}, 1, 7), ...
+    'VariableNames', {'eeg_source_event_index', ...
+    'eeg_destination_event_index', 'edf_source_event_index', ...
+    'edf_destination_event_index', 'eeg_chunk_index', ...
+    'edf_chunk_index', 'interval_number'});
+pair_matches = false(0, 1);
+counts = [prefix_count, suffix_count];
+for part_i = 1:2
+    counterpart_chunk = counterpart_chunks(part_i);
+    counterpart = extract_chunk_edges(counterpart_events, counterpart_Fs, ...
+        counterpart_report, counterpart_chunk);
+    n_canonical = height(counterpart_canonical);
+    if height(counterpart) > n_canonical
+        error('match_triggers:AmbiguousRecoveryCounterpart', ...
+            ['The counterpart chunk also spans an unresolved cycle boundary. ' ...
+             'Its recovered intervals cannot be paired safely.'])
+    end
+
+    % An intact count/type pattern fixes event correspondence even when
+    % several durations are wrong. With missing triggers, recover each
+    % side's independently established canonical prefix and suffix only.
+    canonical_row = zeros(n_canonical, 1);
+    if height(counterpart) == n_canonical && ...
+            isequal(counterpart.source_type, counterpart_canonical.source_type) && ...
+            isequal(counterpart.destination_type, counterpart_canonical.destination_type)
+        canonical_row(:) = (1:n_canonical)';
+    else
+        [gap_start, gap_end, head_count, tail_count] = ...
+            locate_loss_anchors(counterpart, counterpart_canonical, tolerance_sec);
+        canonical_row(1:head_count) = (1:head_count)';
+        canonical_row(end - tail_count + 1:end) = ...
+            (height(counterpart) - tail_count + 1:height(counterpart))';
+        result = add_recovery_period(result, counterpart_system, ...
+            gap_start, gap_end, counterpart_events, counterpart_Fs, ...
+            "recovered_trigger_loss", eeg_chunk_i, edf_chunk_i);
+    end
+
+    count = counts(part_i);
+    if part_i == 1
+        interval_number = (1:count)';
+        affected_row = interval_number;
+    else
+        interval_number = (n_canonical - count + 1:n_canonical)';
+        affected_row = (height(affected) - count + 1:height(affected))';
+    end
+    counterpart_row = canonical_row(interval_number);
+    mapped = counterpart_row > 0;
+    interval_number = interval_number(mapped);
+    affected_row = affected_row(mapped);
+    counterpart_row = counterpart_row(mapped);
+    a = affected(affected_row, :);
+    b = counterpart(counterpart_row, :);
+    matches = false(height(a), 1);
+    for pair_i = 1:height(a)
+        matches(pair_i) = single_edge_matches(a, pair_i, b, pair_i, tolerance_sec);
+    end
+    if affected_system == "eeg"
+        eeg_edges = a;
+        edf_edges = b;
+        eeg_chunks = repmat(eeg_chunk_i, height(a), 1);
+        edf_chunks = repmat(counterpart_chunk, height(a), 1);
+    else
+        eeg_edges = b;
+        edf_edges = a;
+        eeg_chunks = repmat(counterpart_chunk, height(a), 1);
+        edf_chunks = repmat(edf_chunk_i, height(a), 1);
+    end
+    candidates = [candidates; table( ...
+        eeg_edges.source_event_index, eeg_edges.destination_event_index, ...
+        edf_edges.source_event_index, edf_edges.destination_event_index, ...
+        eeg_chunks, edf_chunks, interval_number, ...
+        'VariableNames', candidates.Properties.VariableNames)]; %#ok<AGROW>
+    pair_matches = [pair_matches; matches]; %#ok<AGROW>
+    for bad_i = find(~matches)'
+        result = add_recovery_period(result, counterpart_system, ...
+            b.source_event_index(bad_i), b.destination_event_index(bad_i), ...
+            counterpart_events, counterpart_Fs, "recovered_interval_mismatch", ...
+            eeg_chunk_i, edf_chunk_i);
+    end
+end
+
+% Audit markers throughout the consumed EEG window, including chunks that
+% the next coarse comparison skips. Map anchors through actual event pairs,
+% because merged chunks invalidate a simple chunk-number offset.
+interruptions = result.amplifier_interruptions;
+window_start = eeg_report.start_event_index(eeg_chunk_i);
+window_end = eeg_report.start_event_index(next_eeg_chunk_i);
+for interruption_i = 1:height(interruptions)
+    start_anchor = interruptions.eeg_start_anchor_event_index(interruption_i);
+    end_anchor = interruptions.eeg_end_anchor_event_index(interruption_i);
+    if ~any(interruptions.resolution_status(interruption_i) == ...
+            ["not_reached", "manual_review"]) || ...
+            ~isfinite(start_anchor) || start_anchor >= window_end || ...
+            (isfinite(end_anchor) && end_anchor < window_start)
+        continue
+    end
+    edf_start = recovered_edf_anchor(candidates, start_anchor);
+    edf_end = recovered_edf_anchor(candidates, end_anchor);
+    if isnan(edf_end) && end_anchor >= window_end && ...
+            end_anchor <= eeg_report.end_event_index(next_eeg_chunk_i)
+        [edf_end, ~] = map_eeg_anchor_to_edf( ...
+            end_anchor, next_eeg_chunk_i, next_edf_chunk_i, ...
+            eeg_events, eeg_report, edf_events, edf_report);
+    end
+    covered = candidates.eeg_source_event_index >= start_anchor & ...
+        candidates.eeg_source_event_index < end_anchor;
+    [group_start, group_end] = amplifier_group_bounds(interruptions, ...
+        interruptions.gap_group_index(interruption_i), height(eeg_events));
+    retained = group_end == group_start + 1 && any(covered) && ...
+        all(pair_matches(covered)) && isfinite(edf_start) && isfinite(edf_end);
+    interruptions.exclude_from_segments(interruption_i) = ~retained;
+    if retained
+        interruptions.resolution_status(interruption_i) = "retained_within_tolerance";
+    elseif isfinite(edf_start) && isfinite(edf_end)
+        interruptions.resolution_status(interruption_i) = "excluded_and_relocked";
+    else
+        interruptions.resolution_status(interruption_i) = "manual_review";
+    end
+    interruptions.edf_start_anchor_event_index(interruption_i) = edf_start;
+    interruptions.edf_end_anchor_event_index(interruption_i) = edf_end;
+    if isfinite(edf_start)
+        interruptions.edf_start_anchor_latency(interruption_i) = ...
+            double(edf_events.latency(edf_start));
+    end
+    if isfinite(edf_end)
+        interruptions.edf_end_anchor_latency(interruption_i) = ...
+            double(edf_events.latency(edf_end));
+    end
+    if ~retained
+        result = add_recovery_period(result, "eeg", start_anchor, end_anchor, ...
+            eeg_events, eeg_Fs, "amplifier_disconnect", eeg_chunk_i, edf_chunk_i);
+    end
+end
+result.amplifier_interruptions = interruptions;
+for interruption_i = find(interruptions.exclude_from_segments)'
+    start_anchor = interruptions.eeg_start_anchor_event_index(interruption_i);
+    end_anchor = interruptions.eeg_end_anchor_event_index(interruption_i);
+    if isnan(start_anchor)
+        covered = candidates.eeg_source_event_index < end_anchor;
+    elseif isnan(end_anchor)
+        covered = candidates.eeg_source_event_index >= start_anchor;
+    else
+        covered = candidates.eeg_source_event_index >= start_anchor & ...
+            candidates.eeg_source_event_index < max(end_anchor, start_anchor + 1);
+    end
+    pair_matches(covered) = false;
+end
+pairs = candidates(pair_matches, :);
+has_matching_suffix = any( ...
+    pairs.eeg_destination_event_index == window_end & ...
+    pairs.edf_destination_event_index == ...
+        edf_report.start_event_index(next_edf_chunk_i));
+result.recovered_intervals(end + 1) = struct( ...
+    'eeg_chunk_index', eeg_chunk_i, 'edf_chunk_index', edf_chunk_i, ...
+    'pairs', pairs, 'has_matching_suffix', has_matching_suffix);
+
+end
+
+%%
+function edf_anchor = recovered_edf_anchor(pairs, eeg_anchor)
+
+eeg_index = [pairs.eeg_source_event_index; pairs.eeg_destination_event_index];
+edf_index = [pairs.edf_source_event_index; pairs.edf_destination_event_index];
+mapped = unique(edf_index(eeg_index == eeg_anchor));
+edf_anchor = NaN;
+if numel(mapped) == 1
+    edf_anchor = mapped;
+end
+
+end
+
+%%
+function result = add_recovery_period(result, system, start_anchor, end_anchor, ...
+    events, Fs, reason, eeg_chunk_i, edf_chunk_i)
+
+periods = result.missing_periods;
+same_period = periods.system == system & ...
+    (periods.start_anchor_event_index == start_anchor | ...
+     (isnan(periods.start_anchor_event_index) & isnan(start_anchor))) & ...
+    (periods.end_anchor_event_index == end_anchor | ...
+     (isnan(periods.end_anchor_event_index) & isnan(end_anchor)));
+if any(same_period)
+    if reason == "amplifier_disconnect"
+        result.missing_periods.reason(same_period) = reason;
+    end
+    return
+end
+result.missing_periods = [periods; make_missing_period( ...
+    system, start_anchor, end_anchor, events, Fs, reason, ...
+    eeg_chunk_i, edf_chunk_i)];
 
 end
 

@@ -91,6 +91,38 @@ verifyEqual(testCase, ...
     result.comparison_history{:, 1:2}, [1 1; 2 2; 4 3; 5 4])
 end
 
+function testMissingEdfBoundaryAuditsSkippedEegInterruption(testCase)
+[eeg, edf, ~] = build_pair(complete_keep, missing_boundary_keep);
+eeg.event_table.latency(121:end) = ...
+    eeg.event_table.latency(121:end) - eeg.Fs;
+eeg = attach_amplifier_interruption(eeg, 120, 121, "paired");
+
+result = run_match(eeg, edf);
+
+verifyFalse(testCase, result.requires_relock)
+verifyTrue(testCase, result.terminal_chunk_handled)
+boundary_loss = result.missing_periods( ...
+    result.missing_periods.reason == "suspected_missing_boundary", :);
+verifyEqual(testCase, boundary_loss.system, "edf")
+verifyEqual(testCase, boundary_loss.start_anchor_event_index, 100)
+verifyEqual(testCase, boundary_loss.end_anchor_event_index, 101)
+interruption = result.amplifier_interruptions;
+verifyEqual(testCase, interruption.resolution_status, ...
+    "excluded_and_relocked")
+verifyTrue(testCase, interruption.exclude_from_segments)
+verifyEqual(testCase, interruption.edf_start_anchor_event_index, 114)
+verifyEqual(testCase, interruption.edf_end_anchor_event_index, 115)
+verifyEqual(testCase, interruption.edf_start_anchor_latency, ...
+    double(edf.event_table.latency(114)))
+verifyEqual(testCase, interruption.edf_end_anchor_latency, ...
+    double(edf.event_table.latency(115)))
+amplifier_loss = result.missing_periods( ...
+    result.missing_periods.reason == "amplifier_disconnect", :);
+verifyEqual(testCase, amplifier_loss.system, "eeg")
+verifyEqual(testCase, amplifier_loss.start_anchor_event_index, 120)
+verifyEqual(testCase, amplifier_loss.end_anchor_event_index, 121)
+end
+
 function testMarkedExactCountShortenedIntervalResumesSameOffset(testCase)
 [eeg, edf, ~] = build_pair(complete_keep, complete_keep);
 eeg_start_anchor = eeg.chunk_report.start_event_index(2) + 19;

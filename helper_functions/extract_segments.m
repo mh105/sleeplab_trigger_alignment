@@ -3,6 +3,7 @@ function [matched_segments, figure_handle] = extract_segments( ...
 %EXTRACT_SEGMENTS Extract maximal runs of paired trigger intervals.
 %   MATCHED_SEGMENTS = EXTRACT_SEGMENTS(RESULT, EEG_INPUT, EDF_INPUT)
 %   reconstructs the matched trigger intervals recorded by MATCH_TRIGGERS,
+%   uses its approved interval pairs for loss recovery,
 %   separates them at unsafe gaps, prints the resulting segment table, and
 %   returns it for later processing. Interval k means canonical interval
 %   Tk -> T(k+1); a bounded chunk's last interval reaches the next chunk.
@@ -62,15 +63,14 @@ for history_i = 1:height(history)
             alignment_locked = true;
         end
     elseif any(outcome == ["eeg_data_loss", "edf_data_loss"])
-        if ~alignment_locked
-            continue
-        end
         [loss_pairs, amplifier_pairing_used] = ...
             amplifier_loss_interval_pairs( ...
                 history(history_i, :), trigger_match_result, ...
                 eeg_input, edf_input);
         if amplifier_pairing_used
             alignment_locked = true;
+        elseif ~alignment_locked
+            continue
         else
             [loss_pairs, alignment_locked] = loss_interval_pairs( ...
                 history(history_i, :), outcome, trigger_match_result, ...
@@ -98,6 +98,8 @@ end
 
 interval_pairs = exclude_amplifier_intervals( ...
     interval_pairs, trigger_match_result);
+validate_interval_pairs(interval_pairs, eeg_input, edf_input, ...
+    trigger_match_result.interval_tolerance_sec);
 
 if isempty(interval_pairs)
     error('extract_segments:NoMatchedIntervals', ...
@@ -425,6 +427,17 @@ function [pairs, has_matching_suffix] = loss_interval_pairs( ...
 
 eeg_chunk_i = history_row.eeg_chunk_index;
 edf_chunk_i = history_row.edf_chunk_index;
+if isfield(trigger_match_result, 'recovered_intervals')
+    recovered = trigger_match_result.recovered_intervals;
+    recovery_i = find( ...
+        [recovered.eeg_chunk_index] == eeg_chunk_i & ...
+        [recovered.edf_chunk_index] == edf_chunk_i, 1);
+    if ~isempty(recovery_i)
+        pairs = recovered(recovery_i).pairs;
+        has_matching_suffix = recovered(recovery_i).has_matching_suffix;
+        return
+    end
+end
 if outcome == "eeg_data_loss"
     affected_edges = extract_chunk_edges(eeg_input, eeg_chunk_i);
     canonical = extract_canonical_edges(eeg_input.canonical_cycle);
@@ -485,6 +498,30 @@ else
         clean_suffix, affected_suffix, interval_number);
 end
 pairs = [pairs; suffix_pairs];
+
+end
+
+%%
+function validate_interval_pairs(pairs, eeg_input, edf_input, tolerance_sec)
+
+eeg_events = eeg_input.event_table;
+edf_events = edf_input.event_table;
+eeg_source = pairs.eeg_source_event_index;
+eeg_destination = pairs.eeg_destination_event_index;
+edf_source = pairs.edf_source_event_index;
+edf_destination = pairs.edf_destination_event_index;
+eeg_duration = (double(eeg_events.latency(eeg_destination)) - ...
+    double(eeg_events.latency(eeg_source))) ./ eeg_input.Fs;
+edf_duration = (double(edf_events.latency(edf_destination)) - ...
+    double(edf_events.latency(edf_source))) ./ edf_input.trigger_Fs;
+roundoff_sec = 10 * eps(max([abs(eeg_duration); abs(edf_duration); 1]));
+assert(all(string(eeg_events.type(eeg_source)) == ...
+    string(edf_events.type(edf_source))) && ...
+    all(string(eeg_events.type(eeg_destination)) == ...
+    string(edf_events.type(edf_destination))) && ...
+    all(abs(eeg_duration - edf_duration) <= tolerance_sec + roundoff_sec), ...
+    'extract_segments:UnvalidatedIntervalPair', ...
+    'Every retained trigger interval must agree between EEG and EDF.')
 
 end
 
