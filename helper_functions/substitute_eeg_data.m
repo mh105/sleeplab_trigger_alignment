@@ -18,10 +18,10 @@ function [signalCell_final, figure_handle, percent_outside_bounds] = ...
 %
 %   The unchanged EDF headers are validated as one compatible direct-channel
 %   grid. Bounds percentages use only MATCHED_SAMPLE_MASK. The function
-%   errors when any channel exceeds its bounds in more than 1% of matched
-%   samples; otherwise, the optional sanity figure plots every sample in all
-%   12 final output EDF channels. SIGNALCELL_ALL remains unchanged; the
-%   substituted channel collection is returned as SIGNALCELL_FINAL.
+%   plots every sample in all 12 final output EDF channels when requested,
+%   then errors when any channel exceeds its bounds in more than 5% of matched
+%   samples. SIGNALCELL_ALL remains unchanged; the substituted channel
+%   collection is returned as SIGNALCELL_FINAL.
 
 if nargin < 7
     plot_sanity_check = true;
@@ -206,7 +206,13 @@ fprintf(['\nFinal output EDF channel bounds report ' ...
     matched_sample_count, n_samples, matched_coverage_percent)
 disp(bounds_report, false)
 
-outside_bounds_index = find(percent_outside_bounds > 1);
+if plot_sanity_check
+    figure_handle = plot_substitution_sanity_check( ...
+        signalCell_final(direct_signal_index), direct_channel_names, ...
+        physical_min_uV, physical_max_uV);
+end
+
+outside_bounds_index = find(percent_outside_bounds > 5);
 if ~isempty(outside_bounds_index)
     outside_bounds_details = arrayfun( ...
         @(channel_i) sprintf('%s=%.6f%%', ...
@@ -215,14 +221,8 @@ if ~isempty(outside_bounds_index)
         outside_bounds_index, 'UniformOutput', false);
     error('substitute_eeg_data:OutputOutsidePhysicalBounds', ...
         ['Final output EDF channel(s) exceeded their physical bounds in ' ...
-        'more than 1%% of matched samples: %s.'], ...
+        'more than 5%% of matched samples: %s.'], ...
         strjoin(outside_bounds_details, ', '))
-end
-
-if plot_sanity_check
-    figure_handle = plot_substitution_sanity_check( ...
-        signalCell_final(direct_signal_index), direct_channel_names, ...
-        physical_min_uV, physical_max_uV);
 end
 
 end

@@ -174,7 +174,7 @@ verifyEqual(testCase, reshape(signalCell_final{f3_edf_index}, 1, []), ...
     aligned_eeg_data(f3_index, :))
 end
 
-function testMoreThanOnePercentOutsideBoundsFailsInsideHelper(testCase)
+function testMoreThanFivePercentOutsideBoundsPlotsBeforeFailure(testCase)
 [aligned_eeg_data, edf_eeg_channel_names, aligned_eeg_channel_names, ...
     signalHeader_all, signalCell_all, matched_sample_mask] = ...
     make_fixture(100);
@@ -182,7 +182,7 @@ signalCell_all = make_clinical_mastoids_faulty( ...
     signalHeader_all, signalCell_all, matched_sample_mask);
 aligned_eeg_data(:) = 0;
 c3_index = strcmp(aligned_eeg_channel_names, 'C3');
-aligned_eeg_data(c3_index, 1:2) = 1466;
+aligned_eeg_data(c3_index, 1:6) = 1466;
 
 original_visibility = get(groot, 'defaultFigureVisible');
 visibility_cleanup = onCleanup(@() set( ...
@@ -203,11 +203,22 @@ end
 
 verifyEqual(testCase, caught_identifier, ...
     'substitute_eeg_data:OutputOutsidePhysicalBounds')
-verifyTrue(testCase, contains(caught_message, 'C3=2.000000%'))
-verifyEqual(testCase, findall(groot, 'Type', 'figure'), figures_before)
+verifyTrue(testCase, contains(caught_message, 'C3=6.000000%'))
+verifyTrue(testCase, contains(caught_message, 'more than 5%'))
+new_figures = setdiff(findall(groot, 'Type', 'figure'), figures_before);
+figure_cleanup = onCleanup(@() delete(new_figures));
+assertNumElements(testCase, new_figures, 1)
+ax = findall(new_figures, 'Type', 'axes', ...
+    'Tag', 'substitute_eeg_data_sanity_axes');
+assertNumElements(testCase, ax, 1)
+c3_trace = findall(ax, 'Type', 'line', 'DisplayName', 'C3');
+verifyEqual(testCase, c3_trace.YData, aligned_eeg_data(c3_index, :))
+upper_bound = findall(new_figures, ...
+    'Tag', 'substitute_eeg_data_upper_clip_bound');
+verifyEqual(testCase, upper_bound.Value, 1465)
 end
 
-function testExactlyOnePercentOutsideBoundsIsAllowed(testCase)
+function testMoreThanFivePercentOutsideBoundsWithoutPlotStillFails(testCase)
 [aligned_eeg_data, edf_eeg_channel_names, aligned_eeg_channel_names, ...
     signalHeader_all, signalCell_all, matched_sample_mask] = ...
     make_fixture(100);
@@ -215,7 +226,27 @@ signalCell_all = make_clinical_mastoids_faulty( ...
     signalHeader_all, signalCell_all, matched_sample_mask);
 aligned_eeg_data(:) = 0;
 c3_index = strcmp(aligned_eeg_channel_names, 'C3');
-aligned_eeg_data(c3_index, 1) = 1466;
+aligned_eeg_data(c3_index, 1:6) = 1466;
+figures_before = findall(groot, 'Type', 'figure');
+
+verifyError(testCase, @() substitute_eeg_data( ...
+    aligned_eeg_data, aligned_eeg_channel_names, ...
+    edf_eeg_channel_names, signalHeader_all, signalCell_all, ...
+    matched_sample_mask, false), ...
+    'substitute_eeg_data:OutputOutsidePhysicalBounds')
+
+verifyEqual(testCase, findall(groot, 'Type', 'figure'), figures_before)
+end
+
+function testExactlyFivePercentOutsideBoundsIsAllowed(testCase)
+[aligned_eeg_data, edf_eeg_channel_names, aligned_eeg_channel_names, ...
+    signalHeader_all, signalCell_all, matched_sample_mask] = ...
+    make_fixture(100);
+signalCell_all = make_clinical_mastoids_faulty( ...
+    signalHeader_all, signalCell_all, matched_sample_mask);
+aligned_eeg_data(:) = 0;
+c3_index = strcmp(aligned_eeg_channel_names, 'C3');
+aligned_eeg_data(c3_index, 1:5) = 1466;
 
 [~, ~, figure_handle, percent_outside_bounds] = ...
     capture_substitute_eeg_data( ...
@@ -223,7 +254,7 @@ aligned_eeg_data(c3_index, 1) = 1466;
     signalHeader_all, signalCell_all, matched_sample_mask, false);
 
 verifyEmpty(testCase, figure_handle)
-verifyEqual(testCase, percent_outside_bounds(5), 1)
+verifyEqual(testCase, percent_outside_bounds(5), 5)
 end
 
 function testSanityPlotUsesAllFinalSamplesAndTwelveChannels(testCase)

@@ -602,9 +602,10 @@ Exact boundary values are allowed; decisions use unrounded percentages even
 though the table displays three decimals.
 
 The step-8 figure still plots every output sample in all 12 rows, with dotted
-native physical bounds and y-limits extending 500 uV beyond them. If any raw
-matched-sample percentage exceeds 1%, the helper prints the table and then
-fails before creating the figure or writing an aligned EDF.
+native physical bounds and y-limits extending 500 uV beyond them. The helper
+prints the table and creates the requested figure before rejecting any channel
+whose matched-sample percentage exceeds 5%. This error stops aligned EDF writing
+and leaves the figure open for inspection.
 
 </details>
 
@@ -736,7 +737,7 @@ new files.
   units. No unit conversion is performed. The 12 direct montage channels retain
   their native shared physical and digital limits. The helper reports all 12
   channels against those bounds using matched samples only, and the entry point
-  stops before writing if any channel exceeds 1% outside the bounds.
+  stops before writing if any channel exceeds 5% outside the bounds.
 - Other signal-header fields, including transducer and prefilter descriptions,
   also remain those of the original clinical channels and may not describe the
   substituted HD-EEG source.
