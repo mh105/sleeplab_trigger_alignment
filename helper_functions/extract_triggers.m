@@ -20,6 +20,7 @@ event_code = strip(extractBefore(event_type + ",", ","));
 
 is_impedance = contains(lower(event_type), "impedance");
 is_boundary = strcmpi(event_type, "boundary");
+is_manual_annotation = event_code == "1000";
 is_amplifier_disconnect = event_code == "9001";
 is_amplifier_reconnect = event_code == "9002";
 is_amplifier_event = is_amplifier_disconnect | is_amplifier_reconnect;
@@ -28,7 +29,8 @@ is_amplifier_event = is_amplifier_disconnect | is_amplifier_reconnect;
 % their raw text and trigger anchors in a sidecar for matching and auditing.
 
 % Remove the initial validation sequence: 1, 2, 4, 8, 16, 32, 64
-candidate_idx = find(~is_impedance & ~is_boundary & ~is_amplifier_event);
+candidate_idx = find( ...
+    ~is_impedance & ~is_boundary & ~is_manual_annotation & ~is_amplifier_event);
 validation_pattern = ["1"; "2"; "4"; "8"; "16"; "32"; "64"];
 
 assert(numel(candidate_idx) >= numel(validation_pattern), ...
@@ -42,7 +44,8 @@ is_validation = false(size(event_type));
 is_validation(validation_idx) = true;
 
 use_alignment = ~( ...
-    is_impedance | is_boundary | is_validation | is_amplifier_event);
+    is_impedance | is_boundary | is_manual_annotation | ...
+    is_validation | is_amplifier_event);
 
 % After filtering, alignment triggers should only be 63 or 64
 unexpected_types = setdiff(unique(event_type(use_alignment)), ["63"; "64"]);

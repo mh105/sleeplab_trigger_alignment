@@ -89,9 +89,9 @@ fails early for most violations:
   256 Hz.
 - The selected EDF trigger channel is sampled at exactly 128 Hz. The optional
   `trig_channel` argument defaults to `TcPPG`.
-- After impedance events, `boundary` events, and `9001`/`9002` amplifier markers
-  are excluded, the first remaining HD-EEG events are the validation sequence
-  `1, 2, 4, 8, 16, 32, 64`.
+- After impedance events, `boundary` events, `1000` manual annotations, and
+  `9001`/`9002` amplifier markers are excluded, the first remaining HD-EEG
+  events are the validation sequence `1, 2, 4, 8, 16, 32, 64`.
 - The decoded EDF may contain zero or more `1, 2, 4, 8, 16, 32, 64`
   validation sequences. When more than one is present, the final sequence is
   authoritative for restart alignment. A recording with no EDF validation is
@@ -262,6 +262,9 @@ For HD-EEG events it:
 
 - normalizes event types to stripped strings;
 - removes impedance events and EEGLAB `boundary` events;
+- excludes manual annotations whose comma-delimited leading code is exactly
+  `1000`, including annotations before validation, while preserving the original
+  `EEG.event` entries;
 - verifies and removes the initial `1, 2, 4, 8, 16, 32, 64` validation sequence;
 - removes amplifier disconnect/reconnect codes `9001` and `9002` from the
   canonical trigger stream while retaining their raw text, original event
