@@ -51,6 +51,59 @@ verifyEqual(testCase, ...
     edf_output.pre_authoritative_validation_event_count, 0)
 end
 
+function testEdfIgnoresNoiseBeforeFirstCompleteValidation(testCase)
+leading_noise = [ ...
+    "1"; "orphan"; "2"; "63"; repmat("64", 4, 1); ...
+    "63"; repmat("64", 2, 1)];
+validation_type = ["1"; "2"; "4"; "8"; "16"; "32"; "64"];
+alignment_type = [repmat("64", 4, 1); repmat("63", 6, 1)];
+[eeg_input, edf_input] = build_inputs([], strings(0, 1), ...
+    [leading_noise; validation_type; alignment_type]);
+
+[~, edf_output] = extract_triggers(eeg_input, edf_input);
+
+verifyEqual(testCase, edf_output.event_table.type, alignment_type)
+verifyEqual(testCase, edf_output.validation_sequence_count, 1)
+verifyEqual(testCase, edf_output.validation_sequences.start_latency, ...
+    5 + 10 * numel(leading_noise))
+verifyEqual(testCase, edf_output.validation_sequences.end_latency, ...
+    65 + 10 * numel(leading_noise))
+verifyEqual(testCase, edf_output.pre_authoritative_validation_event_count, 0)
+verifyEqual(testCase, edf_output.event_table.latency(1), ...
+    5 + 10 * (numel(leading_noise) + numel(validation_type)))
+end
+
+function testEdfLowCodeAfterValidationStillFails(testCase)
+validation_type = ["1"; "2"; "4"; "8"; "16"; "32"; "64"];
+alignment_type = [repmat("64", 4, 1); repmat("63", 6, 1)];
+[eeg_input, edf_input] = build_inputs([], strings(0, 1), ...
+    [validation_type; alignment_type; "1"]);
+
+caught_message = '';
+try
+    extract_triggers(eeg_input, edf_input);
+catch caught_error
+    caught_message = caught_error.message;
+end
+verifyEqual(testCase, caught_message, ...
+    'Unexpected EDF trigger type(s) remain after filtering.')
+end
+
+function testEdfLowCodeWithoutValidationStillFails(testCase)
+alignment_type = [repmat("64", 4, 1); repmat("63", 6, 1)];
+[eeg_input, edf_input] = build_inputs([], strings(0, 1), ...
+    ["1"; alignment_type]);
+
+caught_message = '';
+try
+    extract_triggers(eeg_input, edf_input);
+catch caught_error
+    caught_message = caught_error.message;
+end
+verifyEqual(testCase, caught_message, ...
+    'Unexpected EDF trigger type(s) remain after filtering.')
+end
+
 function testFinalEdfValidationIsAuthoritative(testCase)
 validation_type = ["1"; "2"; "4"; "8"; "16"; "32"; "64"];
 pre_authoritative_type = [ ...
@@ -255,6 +308,7 @@ trigger_voltage(trigger_type == "8") = 24.5;
 trigger_voltage(trigger_type == "16") = 30.5;
 trigger_voltage(trigger_type == "32" | trigger_type == "63") = 36.5;
 trigger_voltage(trigger_type == "64") = 42.5;
+trigger_voltage(trigger_type == "orphan") = 20;
 
 trigger_latency = (5:10:(5 + 10 * (numel(trigger_type) - 1)))';
 DC_trace = zeros(trigger_latency(end) + 5, 1);

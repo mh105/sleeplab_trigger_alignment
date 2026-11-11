@@ -294,6 +294,11 @@ occurrence, and discards malformed `64` runs. Zero EDF validation sequences are
 permitted; when sequences are present, metadata identifies the final one as the
 authoritative validation boundary.
 
+When a complete EDF validation sequence is found, triggers before the first
+complete sequence are excluded as startup noise. Valid triggers between
+validation sequences remain available for restart alignment. Without a complete
+validation sequence, leading triggers retain the existing partial-cycle checks.
+
 Trigger times in both systems use MATLAB's one-based sample convention:
 
 ```text

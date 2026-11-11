@@ -209,6 +209,15 @@ fprintf('EDF validation trigger sequences found: %d\n', ...
     validation_sequence_count);
 use_edf_alignment(is_edf_validation) = false;
 
+% A complete validation sequence establishes the start of the trigger stream.
+% Preserve events between validation sequences for restart bookkeeping.
+if validation_sequence_count > 0
+    pre_validation_event_count = validation_start_row(1) - 1;
+    use_edf_alignment(1:pre_validation_event_count) = false;
+    fprintf('EDF trigger detections before first validation ignored: %d\n', ...
+        pre_validation_event_count);
+end
+
 edf_is64 = edf_trigger_table.type == "64";
 edf_run_edges = diff([false; edf_is64; false]);
 edf_run_start = find(edf_run_edges == 1);
